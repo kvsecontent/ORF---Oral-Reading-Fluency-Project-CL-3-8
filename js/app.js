@@ -232,7 +232,9 @@
         <button class="btn ghost" id="bk">${ctx.who === 'teacher' ? '👩‍🏫 Next student' : '🏠 Back'}</button>
       </div></div>`;
     if (audio) $('#vb').appendChild(Voice.player(audio));
-    $$('.practice button').forEach((x) => (x.onclick = () => Reader.speak(x.dataset.w, ctx.lang)));
+    $$('.practice button').forEach((x) => (x.onclick = () => Reader.speak(x.dataset.w, ctx.lang, (why) => toast(why === 'novoice' || why === 'none'
+      ? (ctx.lang === 'hi' ? '🔇 इस डिवाइस में हिंदी आवाज़ नहीं है। Chrome/Edge में खोलें या फ़ोन की Settings → Text-to-speech में Hindi जोड़ें।' : '🔇 No English voice on this device. Open in Chrome or Edge.')
+      : '🔇 Could not play the word. Check the volume and try again.'))));
     $('#again').onclick = () => go('read', { ...ctx, prev: rec.pid });
     $('#bk').onclick = () => go(ctx.who === 'teacher' ? 'teacher' : 'student');
   }

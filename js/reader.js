@@ -70,15 +70,41 @@
     return { st, reached: i, pauseAt };
   }
 
-  function speak(text, lang) {
+  /* Reading a word aloud uses the device's own voices. Chrome loads its list of
+     voices a moment after the page opens, so keep it up to date; without a
+     Hindi voice the default (English) voice stays silent on Hindi words. */
+  const TTS = 'speechSynthesis' in window;
+  let voices = [];
+  const loadVoices = () => { try { voices = speechSynthesis.getVoices() || []; } catch (e) { voices = []; } return voices; };
+  if (TTS) { loadVoices(); try { speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch (e) { speechSynthesis.onvoiceschanged = loadVoices; } }
+  function pickVoice(lang) {
+    const want = lang === 'hi' ? ['hi-in', 'hi'] : ['en-in', 'en-gb', 'en-us', 'en'];
+    const L = (v) => String(v.lang || '').toLowerCase().replace('_', '-');
+    for (const w of want) {
+      const list = voices.filter((v) => L(v).startsWith(w));
+      // prefer an installed voice (works offline), then any
+      const v = list.find((x) => x.localService) || list[0];
+      if (v) return v;
+    }
+    return null;
+  }
+  /* Returns false when the device has no voice for this language; onFail is
+     called if the browser reports an error while speaking. */
+  function speak(text, lang, onFail) {
+    if (!TTS) { onFail && onFail('none'); return false; }
+    if (!voices.length) loadVoices();
+    const v = pickVoice(lang);
+    if (!v && voices.length) { onFail && onFail('novoice'); return false; }
     try {
-      speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'; u.rate = 0.8;
-      const v = speechSynthesis.getVoices().find((x) => x.lang && x.lang.toLowerCase().startsWith(lang === 'hi' ? 'hi' : 'en-in'));
-      if (v) u.voice = v;
-      speechSynthesis.speak(u);
-    } catch (e) { /* no speech */ }
+      if (v) { u.voice = v; u.lang = v.lang; }
+      u.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') onFail && onFail(e.error); };
+      speechSynthesis.cancel();
+      // Chrome drops a word spoken straight after cancel(), and can get stuck paused
+      setTimeout(() => { try { speechSynthesis.resume(); speechSynthesis.speak(u); } catch (e) { onFail && onFail('error'); } }, 80);
+      return true;
+    } catch (e) { onFail && onFail('error'); return false; }
   }
 
   /* mount(el, {passage, lang, onDone(result)}) */
