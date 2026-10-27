@@ -50,6 +50,12 @@
         if (good(t, P[j])) { hit = j; break; }
         if (t2 && P[j].length > 3 && sim(t2, P[j]) >= 0.8) { hit = j; used2 = true; break; }
       }
+      // the recogniser lost a few words: jump ahead only when two heard words in a row match
+      if (hit < 0 && k + 1 < T.length) {
+        for (let j = i + 5; j < Math.min(P.length - 1, i + 25); j++) {
+          if (good(t, P[j]) && good(T[k + 1], P[j + 1])) { hit = j; break; }
+        }
+      }
       if (hit >= 0) {
         for (let j = i; j < hit; j++) st[j] = 'miss';
         st[hit] = 'ok'; i = hit + 1;
@@ -140,29 +146,54 @@
       }, 200);
       if (mode === 'auto') startRec();
     }
+    /* Chrome ends a listening session on its own (a short silence, a network
+       hiccup, or about every minute). Each time, keep what was heard so far and
+       start a fresh session, so the words after the break are still caught. */
+    let fails = 0;
+    const tipReading = () => { $('#tip').className = 'note'; $('#tip').innerHTML = '📖 Read from the first word. Read clearly and stop at full stops (।/.).'; };
     function startRec() {
+      wantRec = true;
+      let r;
       try {
-        rec = new SR(); rec.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
-        wantRec = true; live = [];
-        rec.onresult = (e) => {
-          live = [];
-          for (let r = 0; r < e.results.length; r++) live.push({ text: e.results[r][0].transcript, fin: e.results[r].isFinal });
-          update();
-        };
-        rec.onerror = (e) => {
-          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { wantRec = false; mode = 'manual'; $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ Microphone not allowed. Switched to <b>Teacher marks</b>: tap wrong words, then the last word read.'; controls(); }
-          else if (e.error === 'network') { $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ Internet is needed for the microphone. Check the connection, or mark the words by tapping.'; }
-        };
-        rec.onend = () => {
-          sessions.push(...live.filter((x) => x.fin)); live = [];
-          if (wantRec && phase === 'reading') { try { rec.start(); } catch (e) { /* already running */ } }
-          else if (phase === 'closing') review();
-        };
-        rec.start();
-      } catch (e) { mode = 'manual'; controls(); }
+        r = new SR(); r.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+      } catch (e) { mode = 'manual'; controls(); return; }
+      rec = r; live = [];
+      r.onresult = (e) => {
+        if (rec !== r) return;
+        if (fails) { fails = 0; tipReading(); }
+        live = [];
+        for (let k = 0; k < e.results.length; k++) live.push({ text: e.results[k][0].transcript, fin: e.results[k].isFinal });
+        update();
+      };
+      r.onerror = (e) => {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { wantRec = false; mode = 'manual'; $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ Microphone not allowed. Switched to <b>Teacher marks</b>: tap wrong words, then the last word read.'; controls(); }
+        else if (e.error === 'network' || e.error === 'audio-capture') {
+          fails++;
+          if (fails >= 3) { $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ The microphone keeps stopping (internet is needed). Still trying… If words do not turn green, mark them by tapping.'; }
+        }
+      };
+      r.onend = () => {
+        if (rec !== r) return;
+        // keep unfinished words too: when a session is cut, Chrome never finalises them
+        sessions.push(...dedupe(live).map((x) => ({ text: x.text, fin: true }))); live = [];
+        if (wantRec && phase === 'reading') setTimeout(() => { if (wantRec && phase === 'reading') startRec(); }, fails ? 400 : 50);
+        else if (phase === 'closing') review();
+      };
+      try { r.start(); } catch (e) { setTimeout(() => { if (wantRec && phase === 'reading') startRec(); }, 400); }
+    }
+    // Some phones send each phrase again with the new words added; keep only the longest copy.
+    function dedupe(list) {
+      const out = [];
+      list.forEach((s) => {
+        const prev = out[out.length - 1], a = s.text.trim(), b = prev ? prev.text.trim() : '';
+        if (prev && b && a.startsWith(b)) out[out.length - 1] = s;
+        else if (prev && a && b.startsWith(a)) { /* shorter repeat, skip */ }
+        else out.push(s);
+      });
+      return out;
     }
     function heardList() {
-      const segs = [...sessions, ...live], T = [], ends = new Set();
+      const segs = [...sessions, ...dedupe(live)], T = [], ends = new Set();
       segs.forEach((s) => {
         s.text.trim().split(/\s+/).forEach((w) => { const n = norm(w, lang); if (n) T.push(n); });
         if (s.fin && T.length) ends.add(T.length - 1);
