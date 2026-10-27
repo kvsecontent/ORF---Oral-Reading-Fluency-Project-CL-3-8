@@ -37,6 +37,16 @@
   const today = () => new Date().toISOString();
   const fmtDate = (d) => { const x = new Date(d); return `${String(x.getDate()).padStart(2, '0')}-${MONTHS[x.getMonth()]}-${x.getFullYear()}`; };
   function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
+  // a ▶ button for a reading's voice clip; bindPlay() swaps it for a player
+  const playCell = (r) => (r.aid && window.Voice ? `<button class="play" data-aid="${esc(r.aid)}" title="Listen">▶</button>` : '');
+  function bindPlay(root) {
+    $$('.play', root).forEach((b) => (b.onclick = () => {
+      Voice.get(b.dataset.aid).then((blob) => {
+        if (!blob) { b.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '–' })); toast('This recording is not in this browser'); return; }
+        const a = Voice.player(blob); b.replaceWith(a); a.play().catch(() => { /* */ });
+      });
+    }));
+  }
   const better = (a, b) => (!b || a.wcpm > b.wcpm || (a.wcpm === b.wcpm && a.acc > b.acc));
   const bank = (cls, lang) => (window.ORF_BANK && window.ORF_BANK[cls + '-' + lang]) || [];
   function stopReader() { if (reader) { reader.stop(); reader = null; } try { speechSynthesis.cancel(); } catch (e) { /* */ } }
@@ -174,11 +184,12 @@
         ${Object.entries(best).filter(([k]) => k.startsWith(l + '|')).sort().map(([k, a]) => `<tr><td>${monthLabel(k.split('|')[1])}</td><td><b>${a.wcpm}</b></td><td><b>${a.acc}%</b></td><td>${a.level}</td></tr>`).join('')}
         </table></div>
         <h3 style="margin-top:1rem">All readings</h3>
-        <div class="tbl-wrap"><table class="t"><tr><th>Date</th><th>Level</th><th class="l">Chapter</th><th>Speed (WCPM)</th><th>Accuracy %</th><th>Punctuation</th></tr>
-        ${list.slice().reverse().map((a) => `<tr><td>${fmtDate(a.d)}</td><td>${a.level}</td><td class="l">${esc(a.ch)}</td><td><b>${a.wcpm}</b></td><td>${a.acc}%</td><td>${PUNCT[a.punct] || ''}</td></tr>`).join('')}
+        <div class="tbl-wrap"><table class="t"><tr><th>Date</th><th>Level</th><th class="l">Chapter</th><th>Speed (WCPM)</th><th>Accuracy %</th><th>Punctuation</th><th>🔊 Voice</th></tr>
+        ${list.slice().reverse().map((a) => `<tr><td>${fmtDate(a.d)}</td><td>${a.level}</td><td class="l">${esc(a.ch)}</td><td><b>${a.wcpm}</b></td><td>${a.acc}%</td><td>${PUNCT[a.punct] || ''}</td><td>${playCell(a)}</td></tr>`).join('')}
         </table></div>`).join('')}
       </div>`;
     $('#bk').onclick = () => go('student');
+    bindPlay(app);
   }
 
   /* ---------- reading ---------- */
@@ -192,16 +203,17 @@
       onNew: () => go('read', { ...ctx, prev: p.id }),
       onDone: (r) => {
         const rec = { d: today(), cls: ctx.cls, lang: ctx.lang, level: ctx.level, pid: p.id, ch: `${p.ch}${p.title ? ' – ' + p.title : ''}`, wcpm: r.wcpm, acc: r.acc, punct: r.punct, words: r.read, errors: r.errors, secs: r.secs, mode: r.mode };
+        if (r.audio) { rec.aid = 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); Voice.put(rec.aid, r.audio); }
         if (ctx.who === 'teacher') {
           const t = T(), c = t.classes[t.cur]; if (!c) return go('teacher');
           c.records.push({ roll: ctx.roll, ...rec }); save(KT, t);
         } else { const s = S(); s.attempts.push(rec); save(KS, s); }
-        go('result', { ctx, rec, wrong: r.wrong });
+        go('result', { ctx, rec, wrong: r.wrong, audio: r.audio });
       },
     });
     $('#bk').onclick = () => go(ctx.who === 'teacher' ? 'teacher' : 'student');
   }
-  function result({ ctx, rec, wrong }) {
+  function result({ ctx, rec, wrong, audio }) {
     const b = bandOf(rec, ctx.cls);
     app.innerHTML = `<div class="card">
       <h2>${ctx.studentName ? esc(ctx.studentName) + ' – ' : ''}Your result 🎉</h2>
@@ -212,12 +224,14 @@
         <div class="stat ac"><div class="v">${rec.acc}%</div><div class="k">Accuracy · शुद्धता</div><div class="s">${rec.words - rec.errors} of ${rec.words} words right</div></div>
         <div class="stat pu"><div class="v" style="font-size:2rem;padding:0.5rem 0">${PUNCT[rec.punct]}</div><div class="k">Punctuation · विराम</div><div class="s">stopping at । . , ?</div></div>
       </div>
+      ${audio ? '<div class="voice-box" id="vb"><b>🎧 Listen to your reading</b></div>' : ''}
       ${wrong.length ? `<h3>🔊 Practise these words (tap to listen)</h3><div class="practice">${wrong.slice(0, 24).map((w) => `<button data-w="${esc(w)}">${esc(w)} 🔊</button>`).join('')}</div>` : '<p class="badge" style="font-size:1.1rem">No mistakes – excellent! 👏</p>'}
       <p class="muted" style="margin-top:1rem">${tips(rec)}</p>
       <div class="row" style="margin-top:1rem">
         <button class="btn green big" id="again">📖 Read another passage</button>
         <button class="btn ghost" id="bk">${ctx.who === 'teacher' ? '👩‍🏫 Next student' : '🏠 Back'}</button>
       </div></div>`;
+    if (audio) $('#vb').appendChild(Voice.player(audio));
     $$('.practice button').forEach((x) => (x.onclick = () => Reader.speak(x.dataset.w, ctx.lang)));
     $('#again').onclick = () => go('read', { ...ctx, prev: rec.pid });
     $('#bk').onclick = () => go(ctx.who === 'teacher' ? 'teacher' : 'student');
@@ -337,6 +351,7 @@
     $$('.del').forEach((b) => (b.onclick = () => {
       const x = T(), c = x.classes[x.cur], s = c.students[+b.dataset.i];
       if (!confirm(`Remove ${s.roll}. ${s.name}? Their readings will also be removed.`)) return;
+      if (window.Voice) Voice.del(c.records.filter((r) => String(r.roll) === String(s.roll)).map((r) => r.aid));
       c.students.splice(+b.dataset.i, 1); c.records = c.records.filter((r) => String(r.roll) !== String(s.roll)); save(KT, x); go('teacher');
     }));
   }
@@ -360,16 +375,19 @@
           ${cur.students.map((s) => `<tr><td>${esc(s.roll)}</td><td class="l">${esc(s.name)}</td>${months.map((m) => { const b = best[`${s.roll}|${lang}|${m}`]; return b ? `<td><b>${b.wcpm}</b></td><td>${b.acc}%</td>` : '<td class="muted">–</td><td class="muted">–</td>'; }).join('')}</tr>`).join('')}
         </table></div>
         <h3 style="margin-top:1.2rem">All readings (${recs.length})</h3>
-        <div class="tbl-wrap" style="max-height:24rem"><table class="t"><tr><th>Date</th><th>Roll</th><th class="l">Name</th><th>Level</th><th class="l">Chapter</th><th>Speed</th><th>Accuracy</th><th>Punctuation</th><th></th></tr>
-          ${recs.map((r) => ({ r, i: cur.records.indexOf(r) })).reverse().map(({ r, i }) => `<tr><td>${fmtDate(r.d)}</td><td>${esc(r.roll)}</td><td class="l">${esc((cur.students.find((s) => String(s.roll) === String(r.roll)) || {}).name || '')}</td><td>${r.level}</td><td class="l">${esc(r.ch)}</td><td><b>${r.wcpm}</b></td><td>${r.acc}%</td><td>${PUNCT[r.punct] || ''}</td><td><button class="del" data-i="${i}" title="Delete">🗑</button></td></tr>`).join('')}
+        <div class="tbl-wrap" style="max-height:24rem"><table class="t"><tr><th>Date</th><th>Roll</th><th class="l">Name</th><th>Level</th><th class="l">Chapter</th><th>Speed</th><th>Accuracy</th><th>Punctuation</th><th>🔊 Voice</th><th></th></tr>
+          ${recs.map((r) => ({ r, i: cur.records.indexOf(r) })).reverse().map(({ r, i }) => `<tr><td>${fmtDate(r.d)}</td><td>${esc(r.roll)}</td><td class="l">${esc((cur.students.find((s) => String(s.roll) === String(r.roll)) || {}).name || '')}</td><td>${r.level}</td><td class="l">${esc(r.ch)}</td><td><b>${r.wcpm}</b></td><td>${r.acc}%</td><td>${PUNCT[r.punct] || ''}</td><td>${playCell(r)}</td><td><button class="del" data-i="${i}" title="Delete">🗑</button></td></tr>`).join('')}
         </table></div>`}
       </div>`;
       $$('.pills .pill[data-l]', pane).forEach((b) => (b.onclick = () => { lang = b.dataset.l; save('orf_rec_lang', lang); draw(); }));
       $('#xl').onclick = () => exportExcel(T(), T().classes[T().cur]);
       $$('.del', pane).forEach((b) => (b.onclick = () => {
         if (!confirm('Delete this reading?')) return;
-        const x = T(); x.classes[x.cur].records.splice(+b.dataset.i, 1); save(KT, x); cur = x.classes[x.cur]; draw();
+        const x = T(), gone = x.classes[x.cur].records.splice(+b.dataset.i, 1)[0];
+        if (gone && gone.aid && window.Voice) Voice.del(gone.aid);
+        save(KT, x); cur = x.classes[x.cur]; draw();
       }));
+      bindPlay(pane);
     };
     draw();
   }
@@ -385,7 +403,18 @@
         <p class="muted">Data lives only in this browser. Take a backup file regularly, and use it to move records to another computer.</p>
         <div class="row"><button class="btn green" id="bk">⬇ Download backup</button><label class="btn ghost" style="display:inline-block">⬆ Restore backup<input type="file" id="rs" accept=".json,application/json" hidden></label></div>
         <h3 style="margin-top:1.2rem">🗑 Delete this class</h3>
-        <button class="btn red small" id="dc">Delete class ${esc(t.cur)} and its records</button></div></div>`;
+        <button class="btn red small" id="dc">Delete class ${esc(t.cur)} and its records</button></div>
+      <div class="card"><h3>🎙️ Voice recordings</h3>
+        <p class="muted">Each reading's voice (about 250 KB a minute) is kept only in this browser. The backup file has the scores, not the voices.</p>
+        <p id="vu" class="muted">Checking…</p>
+        <button class="btn red small" id="vclr">Delete all voice recordings</button></div></div>`;
+    if (window.Voice) {
+      Promise.all([Voice.keys(), Voice.usage()]).then(([k, u]) => { $('#vu').innerHTML = `Recordings saved: <b>${k.length}</b>${u.usage ? ` · space used: <b>${(u.usage / 1048576).toFixed(1)} MB</b>${u.quota ? ` of about ${Math.round(u.quota / 1073741824)} GB` : ''}` : ''}`; });
+      $('#vclr').onclick = () => {
+        if (!confirm('Delete ALL voice recordings in this browser (teacher and student)? Scores are kept.')) return;
+        Voice.clear().then(() => { toast('Voice recordings deleted'); go('teacher'); });
+      };
+    } else $('#vclr').disabled = true;
     $('#cp').onclick = () => {
       const x = T();
       if ($('#p0').value !== x.pass) { $('#pe').textContent = 'Current password is wrong.'; return; }
@@ -421,7 +450,9 @@
     };
     $('#dc').onclick = () => {
       if (!confirm(`Delete class ${t.cur} with all its students and readings?`)) return;
-      const x = T(); delete x.classes[x.cur]; x.cur = Object.keys(x.classes)[0] || ''; save(KT, x); tab = 'read'; go('teacher');
+      const x = T();
+      if (window.Voice) Voice.del((x.classes[x.cur].records || []).map((r) => r.aid));
+      delete x.classes[x.cur]; x.cur = Object.keys(x.classes)[0] || ''; save(KT, x); tab = 'read'; go('teacher');
     };
   }
 

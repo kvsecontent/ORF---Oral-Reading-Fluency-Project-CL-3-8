@@ -92,6 +92,8 @@
     let left = DURATION, startAt = 0, elapsed = 0, tick = null;
     let rec = null, sessions = [], live = [], wantRec = false;
     let state = P.map(() => ''), end = -1, pauseAt = new Set(), tapMode = 'mark', punct = null;
+    const V = window.Voice, canVoice = !!(V && V.canRecord);
+    let voiceOn = canVoice && getPref('orf_voice', '1') === '1', vrec = null, voiceBlob = null, voiceDone = null;
 
     el.innerHTML = `
       <div class="rd-head">
@@ -101,6 +103,7 @@
       <div class="note" id="tip"></div>
       <div class="passage blur" id="psg" lang="${lang}">${words.map((w, i) => `<span class="w" data-i="${i}">${esc(w)}</span>`).join(' ')}</div>
       <div class="heard" id="heard"></div>
+      <div id="voice"></div>
       <div class="ctrl" id="ctrl"></div>
       <div id="review"></div>`;
     const $ = (s) => el.querySelector(s);
@@ -121,10 +124,12 @@
       const c = $('#ctrl');
       if (phase === 'ready') {
         c.innerHTML = `${canAuto ? `<span class="mode-sw"><button data-m="auto" class="${mode === 'auto' ? 'on' : ''}">🎤 Auto (mic)</button><button data-m="manual" class="${mode === 'manual' ? 'on' : ''}">✋ Teacher marks</button></span>` : ''}
+          ${canVoice ? `<label class="rec-sw"><input type="checkbox" id="von" ${voiceOn ? 'checked' : ''}> 🎙️ Record voice</label>` : ''}
           <button class="btn big green" id="go">▶ Start reading</button>
           ${opt.onNew ? '<button class="btn ghost" id="newp">🔀 Another passage</button>' : ''}`;
         c.querySelectorAll('.mode-sw button').forEach((b) => (b.onclick = () => { mode = b.dataset.m; controls(); }));
         $('#go').onclick = start;
+        if (canVoice) $('#von').onchange = (e) => { voiceOn = e.target.checked; setPref('orf_voice', voiceOn ? '1' : '0'); };
         if (opt.onNew) $('#newp').onclick = opt.onNew;
         $('#tip').className = 'note' + (canAuto ? '' : ' warn');
         $('#tip').innerHTML = mode === 'auto'
@@ -137,7 +142,24 @@
     }
 
     function start() {
+      if (!voiceOn) return begin();
+      // get the microphone for recording first, so the minute does not run while the browser asks for permission
+      $('#go').disabled = true;
+      $('#tip').className = 'note'; $('#tip').innerHTML = '🎙️ Please <b>allow the microphone</b> if the browser asks…';
+      vrec = V.recorder();
+      let done = false;
+      const go = (ok) => {
+        if (done) return; done = true;
+        if (ok) $('#voice').innerHTML = '<span class="rec-dot">● REC</span>';
+        else { stopVoice(); $('#voice').innerHTML = '<span class="muted">🎙️ Voice is not being recorded.</span>'; }
+        begin();
+      };
+      vrec.start().then(go);
+      setTimeout(() => go(false), 10000);     // no answer to the permission prompt: read without recording
+    }
+    function begin() {
       phase = 'reading'; $('#psg').classList.remove('blur'); startAt = performance.now(); left = DURATION; elapsed = 0;
+      $('#tip').className = 'note';
       $('#tip').innerHTML = mode === 'auto' ? '📖 Read from the first word. Read clearly and stop at full stops (।/.).' : '📖 Child reads aloud now. Tap a word to mark it wrong.';
       controls(); setTimer(); paint();
       tick = setInterval(() => {
@@ -145,6 +167,12 @@
         if (left <= 0) finish();
       }, 200);
       if (mode === 'auto') startRec();
+    }
+    // stop the recording (once) and keep the clip
+    function stopVoice() {
+      if (!vrec) return Promise.resolve(voiceBlob);
+      if (!voiceDone) voiceDone = vrec.stop().then((b) => { voiceBlob = b; return b; });
+      return voiceDone;
     }
     /* Chrome ends a listening session on its own (a short silence, a network
        hiccup, or about every minute). Each time, keep what was heard so far and
@@ -167,7 +195,10 @@
       };
       r.onerror = (e) => {
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { wantRec = false; mode = 'manual'; $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ Microphone not allowed. Switched to <b>Teacher marks</b>: tap wrong words, then the last word read.'; controls(); }
-        else if (e.error === 'network' || e.error === 'audio-capture') {
+        else if (e.error === 'audio-capture' && vrec && vrec.active()) {
+          // some phones cannot record and listen at the same time: keep listening, stop recording
+          stopVoice(); $('#voice').innerHTML = '<span class="muted">🎙️ This device cannot record while listening – recording stopped.</span>';
+        } else if (e.error === 'network' || e.error === 'audio-capture') {
           fails++;
           if (fails >= 3) { $('#tip').className = 'note warn'; $('#tip').innerHTML = '⚠️ The microphone keeps stopping (internet is needed). Still trying… If words do not turn green, mark them by tapping.'; }
         }
@@ -232,6 +263,10 @@
       if (mode === 'auto') punct = autoPunct();
       if (end < 0 && mode === 'manual') tapMode = 'end';
       $('#heard').innerHTML = '';
+      if (vrec) stopVoice().then((b) => {
+        const box = $('#voice'); box.innerHTML = '';
+        if (b) { box.innerHTML = '<b>🔊 Listen to the reading:</b> '; box.appendChild(V.player(b)); }
+      });
       $('#tip').className = 'note';
       $('#tip').innerHTML = '✅ Time over. <b>Check the colours.</b> Tap a word to mark it right/wrong. Use <b>📍 Last word</b> to change where the reading stopped.';
       paint(); drawReview();
@@ -264,12 +299,13 @@
         </div>`;
       el.querySelectorAll('#review .mode-sw button').forEach((b) => (b.onclick = () => { tapMode = b.dataset.t; drawReview(); }));
       el.querySelectorAll('.punct-pick button').forEach((b) => (b.onclick = () => { punct = b.dataset.p; drawReview(); }));
-      $('#again').onclick = () => mount(el, opt);
+      $('#again').onclick = () => { stopVoice(); mount(el, opt); };
       $('#save').onclick = () => {
         const sc = score();
         const wrong = [];
         state.slice(0, sc.read).forEach((x, i) => { if ((x === 'err' || x === 'miss') && !wrong.includes(clean(words[i]))) wrong.push(clean(words[i])); });
-        opt.onDone({ ...sc, punct, mode, wrong });
+        $('#save').disabled = true;
+        stopVoice().then((audio) => opt.onDone({ ...sc, punct, mode, wrong, audio }));
       };
     }
     $('#psg').addEventListener('click', (e) => {
@@ -291,7 +327,7 @@
     });
     // manual mode: make every untouched word up to the end "ok" when the end is set
     controls(); setTimer();
-    return { stop: () => { clearInterval(tick); wantRec = false; try { rec && rec.abort(); } catch (e) { /* */ } } };
+    return { stop: () => { clearInterval(tick); wantRec = false; stopVoice(); try { rec && rec.abort(); } catch (e) { /* */ } } };
   }
 
   // split on spaces; a lone mark such as — or … sticks to the word before it
@@ -303,6 +339,8 @@
     });
     return out;
   }
+  const getPref = (k, d) => { try { const x = localStorage.getItem(k); return x == null ? d : x; } catch (e) { return d; } };
+  const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* */ } };
   const clean = (w) => w.replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '');
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 

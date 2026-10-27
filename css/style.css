@@ -178,3 +178,16 @@ footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 1
 @media print {
   .top, .tabs, .btn, footer { display: none !important; }
 }
+
+/* voice recording */
+.rec-sw { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 700; padding: 0.4rem 0.8rem; border-radius: 0.8rem; background: #fff; border: 0.1rem solid #e2e8f0; cursor: pointer; }
+.rec-sw input { width: 1.2rem; height: 1.2rem; }
+#voice { margin: 0.5rem 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+#voice:empty { display: none; }
+.rec-dot { color: var(--red); font-weight: 800; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: 0.3; } }
+audio.voice { height: 2.4rem; max-width: 100%; }
+.voice-box { margin: 0.8rem 0; padding: 0.8rem; border-radius: 0.9rem; background: var(--green-soft); display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.voice-box audio.voice { flex: 1 1 16rem; }
+.play { border: 0; background: var(--blue); color: #fff; border-radius: 50%; width: 2rem; height: 2rem; font-size: 0.9rem; cursor: pointer; }
+td audio.voice { width: 16rem; min-width: 16rem; height: 2rem; }
