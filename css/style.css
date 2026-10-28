@@ -191,3 +191,4 @@ audio.voice { height: 2.4rem; max-width: 100%; }
 .voice-box audio.voice { flex: 1 1 16rem; }
 .play { border: 0; background: var(--blue); color: #fff; border-radius: 50%; width: 2rem; height: 2rem; font-size: 0.9rem; cursor: pointer; }
 td audio.voice { width: 16rem; min-width: 16rem; height: 2rem; }
+.rec-sw.off { opacity: 0.5; cursor: not-allowed; }

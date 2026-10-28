@@ -119,7 +119,9 @@
     let rec = null, sessions = [], live = [], wantRec = false;
     let state = P.map(() => ''), end = -1, pauseAt = new Set(), tapMode = 'mark', punct = null;
     const V = window.Voice, canVoice = !!(V && V.canRecord);
-    let voiceOn = canVoice && getPref('orf_voice', '1') === '1', vrec = null, voiceBlob = null, voiceDone = null;
+    let voiceOn = canVoice && getPref('orf_voice', '1') === '1', vrec = null, voiceBlob = null, voiceDone = null, heardAny = false;
+    // phones give the microphone to one user at a time: recording or word-listening, not both
+    const voiceUsable = () => canVoice && !(SHARED_MIC && mode === 'auto');
 
     el.innerHTML = `
       <div class="rd-head">
@@ -150,7 +152,7 @@
       const c = $('#ctrl');
       if (phase === 'ready') {
         c.innerHTML = `${canAuto ? `<span class="mode-sw"><button data-m="auto" class="${mode === 'auto' ? 'on' : ''}">🎤 Auto (mic)</button><button data-m="manual" class="${mode === 'manual' ? 'on' : ''}">✋ Teacher marks</button></span>` : ''}
-          ${canVoice ? `<label class="rec-sw"><input type="checkbox" id="von" ${voiceOn ? 'checked' : ''}> 🎙️ Record voice</label>` : ''}
+          ${canVoice ? `<label class="rec-sw ${voiceUsable() ? '' : 'off'}"><input type="checkbox" id="von" ${voiceOn && voiceUsable() ? 'checked' : ''} ${voiceUsable() ? '' : 'disabled'}> 🎙️ Record voice</label>` : ''}
           <button class="btn big green" id="go">▶ Start reading</button>
           ${opt.onNew ? '<button class="btn ghost" id="newp">🔀 Another passage</button>' : ''}`;
         c.querySelectorAll('.mode-sw button').forEach((b) => (b.onclick = () => { mode = b.dataset.m; controls(); }));
@@ -161,6 +163,7 @@
         $('#tip').innerHTML = mode === 'auto'
           ? '🎤 <b>Auto:</b> Press Start, allow the microphone, and read aloud clearly. The app listens and colours each word. You have <b>1 minute</b>.'
           : (canAuto ? '' : '⚠️ This browser cannot listen. Please use <b>Google Chrome</b> or <b>Edge</b> for Auto mode. ') + '✋ <b>Teacher marks:</b> Press Start. While the child reads, tap any word read wrongly or skipped. When time is up, tap the last word read.';
+        if (canVoice && !voiceUsable()) $('#tip').innerHTML += '<br><span class="muted">📱 On a phone the microphone can either mark the words (🎤 Auto) or record the voice. To record, choose <b>✋ Teacher marks</b>.</span>';
       } else if (phase === 'reading') {
         c.innerHTML = `<button class="btn big red ${mode === 'auto' ? 'mic-on' : ''}" id="stop">⏹ Stop</button><span class="muted">${mode === 'auto' ? '🎤 Listening… read aloud' : 'Tap the words read wrongly'}</span>`;
         $('#stop').onclick = () => finish();
@@ -168,7 +171,7 @@
     }
 
     function start() {
-      if (!voiceOn) return begin();
+      if (!voiceOn || !voiceUsable()) return begin();
       // get the microphone for recording first, so the minute does not run while the browser asks for permission
       $('#go').disabled = true;
       $('#tip').className = 'note'; $('#tip').innerHTML = '🎙️ Please <b>allow the microphone</b> if the browser asks…';
@@ -192,7 +195,18 @@
         left = Math.max(0, DURATION - (performance.now() - startAt) / 1000); setTimer();
         if (left <= 0) finish();
       }, 200);
-      if (mode === 'auto') startRec();
+      if (mode === 'auto') {
+        startRec();
+        // if this device cannot record and listen together, nothing is heard: give the microphone to listening
+        heardAny = false;
+        if (vrec) setTimeout(() => {
+          if (phase !== 'reading' || heardAny || !vrec.active()) return;
+          stopVoice().then(() => {
+            $('#voice').innerHTML = '<span class="muted">🎙️ This device cannot record while listening, so recording stopped. Choose ✋ Teacher marks to record.</span>';
+            if (phase === 'reading') { try { rec && rec.abort(); } catch (e) { /* */ } startRec(); }
+          });
+        }, 7000);
+      }
     }
     // stop the recording (once) and keep the clip
     function stopVoice() {
@@ -214,6 +228,7 @@
       rec = r; live = [];
       r.onresult = (e) => {
         if (rec !== r) return;
+        heardAny = true;
         if (fails) { fails = 0; tipReading(); }
         live = [];
         for (let k = 0; k < e.results.length; k++) live.push({ text: e.results[k][0].transcript, fin: e.results[k].isFinal });
@@ -365,6 +380,7 @@
     });
     return out;
   }
+  const SHARED_MIC = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
   const getPref = (k, d) => { try { const x = localStorage.getItem(k); return x == null ? d : x; } catch (e) { return d; } };
   const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* */ } };
   const clean = (w) => w.replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '');
